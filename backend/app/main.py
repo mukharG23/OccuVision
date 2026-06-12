@@ -10,6 +10,7 @@ import face_recognition
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from datetime import datetime
 
 app = FastAPI()
 
@@ -24,12 +25,14 @@ app.add_middleware(
 # ── Paths ─────────────────────────────────────────────────────────────────
 KNOWN_FACES_PATH = "known_faces.json"
 KNOWN_FACES_DIR  = "known_faces"
+ATTENDANCE_DIR = "attendance"
 
 # ── Shared Resources ──────────────────────────────────────────────────────
 frame_queue_face = queue.Queue(maxsize=5)
 frame_queue_yolo = queue.Queue(maxsize=5)
 results = {}
 results_lock = threading.Lock()
+attendance_lock = threading.Lock()
 
 # ── Load Known Faces into RAM at Startup ──────────────────────────────────
 def load_known_faces():
@@ -52,6 +55,28 @@ class FrameData(BaseModel):
     frame: str
 
 # ── Thread B: Face Detection ──────────────────────────────────────────────
+def get_attendance_filepath():
+    today = datetime.now().strftime("%Y-%m-%d")
+    return os.path.join(ATTENDANCE_DIR, f"attendance_{today}.json")
+def update_attendance(name):
+    filepath = get_attendance_filepath()
+    now = datetime.now().strftime("%H:%M:%S")
+
+    with attendance_lock:
+        if os.path.exists(filepath):
+            with open(filepath, "r") as f:
+                data = json.load(f)
+        else:
+            data = {}
+
+        if name not in data:
+            data[name] = {"first_seen": now, "last_seen": now}
+        else:
+            data[name]["last_seen"] = now
+
+        with open(filepath, "w") as f:
+            json.dump(data, f, indent=2)
+
 def thread_b_face():
     frame_count = 0
     consecutive_matches={}
@@ -109,6 +134,7 @@ def thread_b_face():
                             consecutive_matches[name] = consecutive_matches.get(name, 0) + 1
                             if consecutive_matches[name] >= 3:
                                 confirmed = True
+                                update_attendance(name)
 
                 boxes.append({
                     "x": x, "y": y, "width": bw, "height": bh,
@@ -215,3 +241,12 @@ async def register_face(name: str = Form(...), file: UploadFile = File(...)):
     known_embeddings = [np.array(v) for v in known_faces_data.values()]
 
     return {"status": "ok", "message": f"{name} registered successfully"}
+
+@app.get("/attendance")
+def get_attendance():
+    filepath = get_attendance_filepath()
+    if not os.path.exists(filepath):
+        return {}
+    with attendance_lock:
+        with open(filepath, "r") as f:
+            return json.load(f)

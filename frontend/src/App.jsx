@@ -7,6 +7,7 @@ function App() {
   const { videoRef, isActive, stop, start } = useWebcam()
   const canvasRef = useRef(null)
   const facesRef = useRef([])  // stores latest face boxes — updated by polling
+  const objectsRef = useRef([])
   const [attendance, setAttendance] = useState({})
 
   // ── Polling Loop: fetch results every 500ms ───────────────────────────
@@ -18,6 +19,7 @@ function App() {
         const res = await fetch(`${BACKEND_URL}/results`)
         const data = await res.json()
         facesRef.current = data.faces || []
+        objectsRef.current = data.objects || []
       } catch (err) {
         // backend down or slow — keep last known boxes
       }
@@ -76,6 +78,16 @@ function App() {
           ctx.fillStyle = color
           ctx.font = "14px Arial"
           ctx.fillText(label, face.x, face.y - 5)
+        })
+        objectsRef.current.forEach(obj => {
+          ctx.strokeStyle = "#0099FF"
+          ctx.lineWidth = 2
+          ctx.strokeRect(obj.x, obj.y, obj.width, obj.height)
+
+          ctx.fillStyle = "#0099FF"
+          ctx.font = "14px Arial"
+          const labelY = obj.y > 15 ? obj.y - 5 : obj.y + 15  // if too close to top, draw label inside the box instead
+          ctx.fillText(`${obj.label} ${Math.round(obj.confidence * 100)}%`, obj.x, labelY)
         })
       }
 

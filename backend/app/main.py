@@ -11,6 +11,7 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime
+from ultralytics import YOLO
 
 app = FastAPI()
 
@@ -49,6 +50,7 @@ known_faces_data, known_names, known_embeddings = load_known_faces()
 # ── MediaPipe Setup ───────────────────────────────────────────────────────
 mp_face = mp.solutions.face_detection
 face_detector = mp_face.FaceDetection(min_detection_confidence=0.6)
+yolo_model = YOLO("yolov8n.pt")
 
 # ── Request Model ─────────────────────────────────────────────────────────
 class FrameData(BaseModel):
@@ -111,10 +113,23 @@ def thread_b_face():
                 confirmed=False
 
                 if known_embeddings and bw>0 and bh>0:
-                    face_location=[(y,x+bw,y+bh,x)]
-                    encodings=face_recognition.face_encodings(
-                        rgb_frame, known_face_locations=face_location
-                    )
+                    try:
+                        safe_frame = np.ascontiguousarray(rgb_frame)
+                        crop = safe_frame[y:y+bh, x:x+bw]
+                        crop = np.ascontiguousarray(crop)
+
+                        crop_h, crop_w = crop.shape[:2]
+                        full_box_location = [(0, crop_w, crop_h, 0)]
+
+                        encodings = face_recognition.face_encodings(
+                            crop, known_face_locations=full_box_location
+                        )
+
+                    except Exception as e:
+                        print(f"DEBUG: face_recognition failed - {e}")
+                        encodings = []
+
+
                     if len(encodings) > 0:
                         face_embedding = encodings[0]
 
@@ -151,7 +166,35 @@ def thread_b_face():
 
 # ── Thread C: YOLO (empty for now) ───────────────────────────────────────
 def thread_c_yolo():
-    pass
+    frame_count = 0
+    while True:
+        try:
+            frame=frame_queue_yolo.get(timeout=1)
+        except queue.Empty:
+            continue
+        frame_count+=1
+        if frame_count%5!=0:
+            continue
+        yolo_results=yolo_model(frame,verbose=False)
+        objects=[]
+        for box in yolo_results[0].boxes:
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            confidence = float(box.conf[0])
+            class_id = int(box.cls[0])
+            class_name = yolo_model.names[class_id]
+
+            if confidence<0.6:
+                continue
+            objects.append({
+                "x": int(x1),
+                "y": int(y1),
+                "width": int(x2 - x1),
+                "height": int(y2 - y1),
+                "label": class_name,
+                "confidence": round(confidence, 2)
+            })
+        with results_lock:
+            results["objects"]=objects
 
 # ── Start Threads on Startup ──────────────────────────────────────────────
 @app.on_event("startup")

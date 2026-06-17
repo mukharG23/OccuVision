@@ -13,9 +13,86 @@ from pydantic import BaseModel
 from datetime import datetime
 from ultralytics import YOLO
 
+#Centroid Tracker
+class CentroidTracker:
+    def __init__(self, max_disappeared=10, max_distance=50):
+        self.next_id = 1
+        self.objects = {}        # id -> centroid (x, y)
+        self.disappeared = {}    # id -> frames since last matched
+        self.max_disappeared = max_disappeared
+        self.max_distance = max_distance
+
+    def register(self, centroid):
+        self.objects[self.next_id] = centroid
+        self.disappeared[self.next_id] = 0
+        self.next_id += 1
+
+    def deregister(self, object_id):
+        del self.objects[object_id]
+        del self.disappeared[object_id]
+
+    def update(self, input_centroids):
+        if len(input_centroids) == 0:
+            for object_id in list(self.disappeared.keys()):
+                self.disappeared[object_id] += 1
+                if self.disappeared[object_id] > self.max_disappeared:
+                    self.deregister(object_id)
+            return self.objects
+
+        # No existing tracked objects — register all as new
+        if len(self.objects) == 0:
+            for centroid in input_centroids:
+                self.register(centroid)
+            return self.objects
+
+        # Match existing objects to new centroids by closest distance
+        object_ids = list(self.objects.keys())
+        object_centroids = list(self.objects.values())
+
+        used_input_indices = set()
+        used_object_ids = set()
+
+        # For each existing object, find the closest new centroid
+        for object_id, object_centroid in zip(object_ids, object_centroids):
+            best_distance = None
+            best_idx = None
+
+            for idx, input_centroid in enumerate(input_centroids):
+                if idx in used_input_indices:
+                    continue
+
+                dist = np.sqrt(
+                    (object_centroid[0] - input_centroid[0]) ** 2 +
+                    (object_centroid[1] - input_centroid[1]) ** 2
+                )
+
+                if best_distance is None or dist < best_distance:
+                    best_distance = dist
+                    best_idx = idx
+
+            if best_distance is not None and best_distance <= self.max_distance:
+                self.objects[object_id] = input_centroids[best_idx]
+                self.disappeared[object_id] = 0
+                used_input_indices.add(best_idx)
+                used_object_ids.add(object_id)
+
+        # Any existing object not matched this frame → disappeared += 1
+        for object_id in object_ids:
+            if object_id not in used_object_ids:
+                self.disappeared[object_id] += 1
+                if self.disappeared[object_id] > self.max_disappeared:
+                    self.deregister(object_id)
+
+        # Any new centroid not matched to an existing object → register as new
+        for idx, centroid in enumerate(input_centroids):
+            if idx not in used_input_indices:
+                self.register(centroid)
+
+        return self.objects
+
 app = FastAPI()
 
-# ── CORS ──────────────────────────────────────────────────────────────────
+#CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -23,19 +100,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Paths ─────────────────────────────────────────────────────────────────
+#Paths
 KNOWN_FACES_PATH = "known_faces.json"
 KNOWN_FACES_DIR  = "known_faces"
 ATTENDANCE_DIR = "attendance"
 
-# ── Shared Resources ──────────────────────────────────────────────────────
 frame_queue_face = queue.Queue(maxsize=5)
 frame_queue_yolo = queue.Queue(maxsize=5)
 results = {}
 results_lock = threading.Lock()
 attendance_lock = threading.Lock()
 
-# ── Load Known Faces into RAM at Startup ──────────────────────────────────
+#Load Known Faces at Startup 
 def load_known_faces():
     if not os.path.exists(KNOWN_FACES_PATH):
         return {}, [],[]
@@ -47,16 +123,17 @@ def load_known_faces():
 
 known_faces_data, known_names, known_embeddings = load_known_faces()
 
-# ── MediaPipe Setup ───────────────────────────────────────────────────────
+#MediaPipe Setup
 mp_face = mp.solutions.face_detection
 face_detector = mp_face.FaceDetection(min_detection_confidence=0.6)
 yolo_model = YOLO("yolov8n.pt")
+person_tracker = CentroidTracker(max_disappeared=10, max_distance=50)
 
-# ── Request Model ─────────────────────────────────────────────────────────
+#Request Model
 class FrameData(BaseModel):
     frame: str
 
-# ── Thread B: Face Detection ──────────────────────────────────────────────
+#Thread B: Face Detection
 def get_attendance_filepath():
     today = datetime.now().strftime("%Y-%m-%d")
     return os.path.join(ATTENDANCE_DIR, f"attendance_{today}.json")
@@ -164,7 +241,7 @@ def thread_b_face():
         with results_lock:
             results["faces"] = boxes
 
-# ── Thread C: YOLO (empty for now) ───────────────────────────────────────
+#Thread C: YOLO
 def thread_c_yolo():
     frame_count = 0
     while True:
@@ -177,6 +254,7 @@ def thread_c_yolo():
             continue
         yolo_results=yolo_model(frame,verbose=False)
         objects=[]
+        person_centroids=[]
         for box in yolo_results[0].boxes:
             x1, y1, x2, y2 = box.xyxy[0].tolist()
             confidence = float(box.conf[0])
@@ -185,24 +263,35 @@ def thread_c_yolo():
 
             if confidence<0.6:
                 continue
-            objects.append({
+            obj_data={
                 "x": int(x1),
                 "y": int(y1),
                 "width": int(x2 - x1),
                 "height": int(y2 - y1),
                 "label": class_name,
                 "confidence": round(confidence, 2)
-            })
+            }
+            objects.append(obj_data)
+            if class_name=="person":
+                centroid_x=(x1 + x2) / 2
+                centroid_y=(y1 + y2) / 2
+                person_centroids.append((centroid_x, centroid_y))
+        tracked = person_tracker.update(person_centroids)
+        tracked_people = [
+            {"id": obj_id, "centroid_x": centroid[0], "centroid_y": centroid[1]}
+            for obj_id, centroid in tracked.items()
+        ]
         with results_lock:
             results["objects"]=objects
+            results["tracked_people"] = tracked_people
 
-# ── Start Threads on Startup ──────────────────────────────────────────────
+#Start Threads on Startup 
 @app.on_event("startup")
 def start_threads():
     threading.Thread(target=thread_b_face, daemon=True).start()
     threading.Thread(target=thread_c_yolo, daemon=True).start()
 
-# ── Endpoints ─────────────────────────────────────────────────────────────
+#Endpoints
 @app.get("/health")
 def health_check():
     return {"status": "SentinelAI backend is running"}

@@ -7,6 +7,7 @@ import numpy as np
 import cv2
 import mediapipe as mp
 import face_recognition
+import time
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -137,6 +138,11 @@ mp_face = mp.solutions.face_detection
 face_detector = mp_face.FaceDetection(min_detection_confidence=0.6)
 yolo_model = YOLO("yolov8n.pt")
 person_tracker = CentroidTracker(max_disappeared=10, max_distance=50)
+unknown_face_tracker = CentroidTracker(max_disappeared=5, max_distance=80)
+unknown_face_first_seen = {}
+last_alert_time = {} 
+last_global_alert_time = 0
+alerts = []
 
 #Request Model
 class FrameData(BaseModel):
@@ -252,9 +258,44 @@ def thread_b_face():
         for name in list(consecutive_matches.keys()):
             if name not in matched_names_this_frame:
                 consecutive_matches[name] = 0
+        
+        unknown_centroids = []
+        for box in boxes:
+            if box["name"] == "Unknown":
+                cx = box["x"] + box["width"] / 2
+                cy = box["y"] + box["height"] / 2
+                unknown_centroids.append((cx, cy))
+        print(f"DEBUG: unknown_centroids this frame = {unknown_centroids}")
+        tracked_unknowns = unknown_face_tracker.update(unknown_centroids)
+        print(f"DEBUG: tracked_unknowns IDs = {list(tracked_unknowns.keys())}")
+        now = time.time()
+
+        for unknown_id in tracked_unknowns:
+            if unknown_id not in unknown_face_first_seen:
+                unknown_face_first_seen[unknown_id] = now
+
+            duration_present = now - unknown_face_first_seen[unknown_id]
+            print(f"DEBUG: id={unknown_id}, duration={duration_present:.1f}s")
+
+            if duration_present >= 5:
+                global last_global_alert_time
+                if now - last_global_alert_time >= 30:
+                    alert_message = f"Unrecognized face present for {int(duration_present)}s"
+                    alerts.insert(0, {
+                        "message": alert_message,
+                        "timestamp": datetime.now().strftime("%H:%M:%S")
+                    })
+                    last_global_alert_time = now
+                    last_alert_time[unknown_id] = now
+        for old_id in list(unknown_face_first_seen.keys()):
+            if old_id not in tracked_unknowns:
+                del unknown_face_first_seen[old_id]
+                if old_id in last_alert_time:
+                    del last_alert_time[old_id]
 
         with results_lock:
             results["faces"] = boxes
+            results["alerts"] = alerts[:10]
 
 #Thread C: YOLO
 def thread_c_yolo():

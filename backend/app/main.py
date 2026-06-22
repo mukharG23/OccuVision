@@ -224,7 +224,6 @@ def thread_b_face():
                         )
 
                     except Exception as e:
-                        print(f"DEBUG: face_recognition failed - {e}")
                         encodings = []
 
 
@@ -265,9 +264,7 @@ def thread_b_face():
                 cx = box["x"] + box["width"] / 2
                 cy = box["y"] + box["height"] / 2
                 unknown_centroids.append((cx, cy))
-        print(f"DEBUG: unknown_centroids this frame = {unknown_centroids}")
         tracked_unknowns = unknown_face_tracker.update(unknown_centroids)
-        print(f"DEBUG: tracked_unknowns IDs = {list(tracked_unknowns.keys())}")
         now = time.time()
 
         for unknown_id in tracked_unknowns:
@@ -275,7 +272,6 @@ def thread_b_face():
                 unknown_face_first_seen[unknown_id] = now
 
             duration_present = now - unknown_face_first_seen[unknown_id]
-            print(f"DEBUG: id={unknown_id}, duration={duration_present:.1f}s")
 
             if duration_present >= 5:
                 global last_global_alert_time

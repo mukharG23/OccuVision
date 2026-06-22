@@ -14,6 +14,7 @@ function App() {
   const [drawStart, setDrawStart] = useState({ x: 0, y: 0 })
   const [drawCurrent, setDrawCurrent] = useState({ x: 0, y: 0 })
   const [zones, setZones] = useState({})
+  const [alertsList, setAlertsList] = useState([])
 
   useEffect(() => {
     if (!isActive) return
@@ -24,6 +25,7 @@ function App() {
         facesRef.current = data.faces || []
         objectsRef.current = data.objects || []
         zoneCountsRef.current = data.zone_counts || {}
+        setAlertsList(data.alerts || [])
       } catch (err) {}
     }, 500)
     return () => clearInterval(pollInterval)
@@ -245,6 +247,27 @@ function App() {
                 First seen: {times.first_seen}
                 <br />
                 Last seen: {times.last_seen}
+              </li>
+            ))}
+
+          </ul>
+        )}
+        <h2>Alerts</h2>
+        {alertsList.length === 0 ? (
+          <p>No alerts.</p>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0 }}>
+            {alertsList.map((alert, index) => (
+              <li key={index} style={{
+                marginBottom: "8px",
+                padding: "10px",
+                border: "1px solid #ff4444",
+                borderRadius: "6px",
+                backgroundColor: "#fff5f5"
+              }}>
+                ⚠️ {alert.message}
+                <br />
+                <small style={{ color: "#888" }}>{alert.timestamp}</small>
               </li>
             ))}
           </ul>

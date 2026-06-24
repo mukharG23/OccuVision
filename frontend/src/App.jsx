@@ -313,6 +313,54 @@ function App() {
             ))}
           </ul>
         )}
+        <h2>Zones</h2>
+        {Object.keys(zones).length === 0 ? (
+          <p>No zones defined.</p>
+        ) : (
+          <ul style={{ listStyle: "none", padding: 0 }}>
+            {Object.entries(zones).map(([name, zone]) => (
+              <li key={name} style={{
+                marginBottom: "8px",
+                padding: "10px",
+                border: "1px solid #FFD700",
+                borderRadius: "6px",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center"
+              }}>
+                <span> {name}</span>
+                <button
+                  onClick={async () => {
+                    try {
+                      const res = await fetch(`${BACKEND_URL}/zones/${encodeURIComponent(name)}`, {
+                        method: "DELETE"
+                      })
+                      const data = await res.json()
+                      if (data.status === "ok") {
+                        setZones(prev => {
+                          const updated = { ...prev }
+                          delete updated[name]
+                          return updated
+                        })
+                      }
+                    } catch (err) {
+                      console.error("Failed to delete zone:", err)
+                    }
+                  }}
+                  style={{
+                    background: "none",
+                    border: "1px solid #ff4444",
+                    borderRadius: "4px",
+                    cursor: "pointer",
+                    color: "#ff4444",
+                    fontSize: "12px",
+                    padding: "2px 8px"
+                  }}
+                >Delete</button>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   )

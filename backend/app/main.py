@@ -238,7 +238,7 @@ def generate_scene_narration():
         response = groq_client.chat.completions.create(
             model="openai/gpt-oss-20b",
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=100
+            max_tokens=200
         )
         narration = response.choices[0].message.content.strip()
 
@@ -529,6 +529,19 @@ async def save_zone(zone: ZoneData):
         json.dump(zones_data, f, indent=2)
 
     return {"status": "ok", "message": f"Zone '{zone.name}' saved"}
+
+@app.delete("/zones/{zone_name}")
+def delete_zone(zone_name: str):
+    global zones_data
+    if zone_name not in zones_data:
+        return {"status": "error", "message": f"Zone '{zone_name}' not found"}
+    
+    del zones_data[zone_name]
+    
+    with open(ZONES_PATH, "w") as f:
+        json.dump(zones_data, f, indent=2)
+    
+    return {"status": "ok", "message": f"Zone '{zone_name}' deleted"}
 
 @app.get("/zones")
 def get_zones():

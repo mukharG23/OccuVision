@@ -427,7 +427,7 @@ def start_threads():
 #Endpoints
 @app.get("/health")
 def health_check():
-    return {"status": "SentinelAI backend is running"}
+    return {"status": "OccuVision backend is running"}
 
 @app.post("/frame")
 def receive_frame(data: FrameData):
@@ -541,7 +541,7 @@ def delete_zone(zone_name: str):
     with open(ZONES_PATH, "w") as f:
         json.dump(zones_data, f, indent=2)
     
-    return {"status": "ok", "message": f"Zone '{zone_name}' deleted"}
+    return {"status": "ok", "message": f"Zone '{zone_name}' deleted"} 
 
 @app.get("/zones")
 def get_zones():

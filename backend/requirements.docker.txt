@@ -1,0 +1,13 @@
+numpy==1.26.4
+fastapi==0.115.0
+uvicorn==0.29.0
+opencv-python-headless==4.9.0.80
+mediapipe==0.10.11
+face_recognition
+ultralytics==8.3.0
+python-multipart==0.0.9
+pydantic==2.6.0
+python-dotenv
+groq
+pillow
+scipy

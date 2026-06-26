@@ -1,57 +1,147 @@
 # OccuVision
 
-Real-time workspace intelligence — face recognition, attendance, occupancy & scene understanding.
-Stack: React + FastAPI + MediaPipe + face_recognition + YOLOv8n + Groq
----
-## What This Project Is
-
-A full-stack real-time workspace intelligence dashboard. A webcam feed is processed by the backend to detect and recognize faces, track attendance, detect office objects via YOLO, count occupancy in defined zones, and (planned) generate natural language scene summaries using a Vision Language Model.
+A real-time workspace intelligence dashboard that processes live webcam feeds to detect and recognize faces, track attendance, monitor zone occupancy, detect office objects, and generate natural language scene summaries.
 
 ---
 
-## Tech Stack
+## Features
 
-- **Frontend:** React (Vite), custom webcam hook, HTML5 Canvas overlay
-- **Backend:** FastAPI + Uvicorn, Python threading, OpenCV
-- **AI/ML:** MediaPipe (face detection), face_recognition/dlib (128D embeddings), YOLOv8n (object detection), Groq API (planned — VLM scene narration)
-- **Storage:** JSON flat-files — no SQL, intentional simplicity for this scale
-- **DevOps:** Monorepo, Git, Docker + docker-compose
+- **Face Detection** — MediaPipe BlazeFace detects faces in real-time at 30fps
+- **Face Recognition** — 128D embeddings via `face_recognition`, Euclidean distance matching
+- **Attendance Logging** — Automatic First Seen / Last Seen timestamps, daily JSON rotation
+- **Object Detection** — YOLOv8n detects office objects (laptop, chair, phone, etc.)
+- **Zone Counting** — Click-drag to define zones, live occupancy count per zone
+- **Centroid Tracking** — Unique IDs assigned to tracked persons across frames
+- **Unknown Face Alerts** — Triggers after 5 seconds of unrecognized face, 30s global cooldown
+- **VLM Scene Narration** — Groq API generates natural language room summaries every 10 seconds
+- **Dark/Light Mode** — UI toggle
+- **Docker Support** — One-command deployment via docker-compose
 
 ---
 
 ## Architecture
 
-### 3-Thread Design
-- **Thread A** — Frame capture. Always running, fed by `POST /frame`, never blocked by AI inference.
-- **Thread B** — Face recognition. Pulls from `frame_queue_face`, processes every 3rd frame.
-- **Thread C** — YOLOv8n detection + centroid tracking + zone counting. Pulls from `frame_queue_yolo`, processes every 5th frame.
-- `results{}` dict is shared between B and C — protected by `threading.Lock()`.
-- Both queues have `maxsize=5` — old frames drop silently when full (backpressure, never blocks capture).
+```
+Browser (React + Vite)
+│
+│  getUserMedia() → 15 FPS Base64 frames → POST /frame
+│  GET /results ← bounding boxes, labels, narration, alerts
+│
+FastAPI Backend (Uvicorn)
+│
+├── Thread A — Frame capture, feeds two queues
+├── Thread B — MediaPipe detection → face_recognition matching (every 3rd frame)
+└── Thread C — YOLOv8n inference → CentroidTracker (every 5th frame)
+│
+├── known_faces.json     — registered face embeddings
+├── attendance_*.json    — daily attendance logs
+└── zones.json           — zone definitions
+│
+└── Groq API (openai/gpt-oss-20b) — scene narration
+```
 
 ---
 
-## Known Compatibility Issues (CRITICAL — read before touching dependencies)
+## Tech Stack
 
-### numpy must stay pinned at 1.26.4
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React (Vite), HTML5 Canvas |
+| Backend | FastAPI, Uvicorn, Python 3.11 |
+| Face Detection | MediaPipe 0.10.11 |
+| Face Recognition | face_recognition, dlib 19.24.1 |
+| Object Detection | YOLOv8n (Ultralytics) |
+| VLM Narration | Groq API |
+| Storage | JSON flat-files |
+| DevOps | Docker, docker-compose |
 
-`dlib==19.24.1` is incompatible with numpy 2.x and fails with:
-RuntimeError: Unsupported image type, must be 8bit gray or RGB image.
-it's purely a numpy version mismatch. Several packages we install (`ultralytics`, `opencv-contrib-python`, `jax`) request `numpy>=2.0` and will silently upgrade numpy if you `pip install` them directly without re-pinning afterward.
+---
 
-### mediapipe must be 0.10.11, not latest
+## Running with Docker (Recommended)
 
-Newer mediapipe versions removed the `mp.solutions` API entirely, breaking `mp.solutions.face_detection`.
+### Prerequisites
+- Docker Desktop installed and running
 
-## How to Start Servers
+### Steps
 
-**Backend:**
+```bash
+git clone https://github.com/mukharG23/OccuVision.git
+cd OccuVision
+```
+
+Create `backend/.env`:
+```
+GROQ_API_KEY=your_groq_api_key_here
+```
+
+Then:
+```bash
+docker-compose up
+```
+
+- Frontend: http://localhost:5173
+- Backend: http://localhost:8000
+
+---
+
+## Running Locally
+
+### Backend
+
+```powershell
 cd backend
+python -m venv venv
 venv\Scripts\activate
+
+# Install dlib prebuilt wheel first (Windows only)
+pip install https://github.com/sachadee/Dlib/raw/main/dlib-19.24.1-cp311-cp311-win_amd64.whl
+pip install numpy==1.26.4
+pip install -r requirements.txt
+
 uvicorn app.main:app --reload
+```
 
-**Frontend:**
+### Frontend
 
+```powershell
 cd frontend
+npm install
 npm run dev
+```
 
 ---
+
+## Registering a Face
+
+1. Open http://localhost:5173
+2. Use the registration panel — enter a name and upload a clear face photo
+3. The backend generates a 128D embedding and saves it to `known_faces.json`
+4. Recognition is active immediately — no restart needed
+
+---
+
+## Known Compatibility Issues
+
+| Issue | Fix |
+|-------|-----|
+| `numpy` must be pinned to `1.26.4` | `dlib 19.24.1` breaks on numpy 2.x with a misleading "Unsupported image type" error |
+| `mediapipe` must be `0.10.11` | Newer versions removed the `mp.solutions` API |
+| `dlib` on Windows requires a prebuilt wheel | Source compilation requires Visual C++ build tools; use sachadee's prebuilt wheel instead |
+| `ultralytics` silently upgrades numpy to 2.x | Always run `pip install numpy==1.26.4` after installing ultralytics |
+| Groq model `llama3-8b-8192` is decommissioned | Use `openai/gpt-oss-20b` |
+| `face_recognition.face_encodings()` with `known_face_locations` crashes on this dlib build | Pass cropped face region directly instead |
+
+---
+
+## Known Limitations
+
+- Zone deletion requires manually editing `zones.json` — no UI for it
+- Centroid tracker IDs reset when a person leaves and re-enters the frame
+- Docker image is large (~18GB) due to PyTorch dependency pulled in by Ultralytics
+- Unknown face alert uses a single global cooldown — not per-identity
+
+---
+
+## Author
+
+[mukharG23](https://github.com/mukharG23)
